@@ -1,0 +1,41 @@
+name: Build & Deploy GeoLab Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "notebooks/**"   # rebuild when notebooks change
+      - "src/**"         # rebuild when styles/scripts change
+      - "build.py"       # rebuild when builder changes
+  workflow_dispatch:      # allow manual trigger from GitHub UI
+
+permissions:
+  contents: write        # needed to push to gh-pages branch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1 — Checkout repo
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2 — Set up Python
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3 — Run build script
+      - name: Build site
+        run: python build.py
+
+      # 4 — Deploy docs/ to GitHub Pages
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
+          publish_branch: gh-pages
+          commit_message: "Auto-build: ${{ github.sha }}"
