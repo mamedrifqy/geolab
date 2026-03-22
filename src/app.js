@@ -82,18 +82,69 @@ function renderMD(md) {
 
 // ── Syntax highlighter ─────────────────────────────────────────────────────
 function highlight(code) {
-  let h = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const parts = [];
-  const ph = (cls, txt) => { const i = parts.length; parts.push('<span class="' + cls + '">' + txt + '</span>'); return '\x00' + i + '\x00'; };
+  // Tokenise line-by-line to avoid cross-token contamination
+  const KW = new Set(['import','from','def','class','return','for','in','if','elif',
+    'else','try','except','with','as','and','or','not','True','False','None',
+    'lambda','yield','pass','break','continue','raise','global','nonlocal','assert','del']);
 
-  h = h.replace(/(#[^\n]*)/g,                        (_, c) => ph('cm', c));
-  h = h.replace(/("""[\s\S]*?"""|'''[\s\S]*?''')/g,  (_, c) => ph('st', c));
-  h = h.replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, (_, c) => ph('st', c));
-  h = h.replace(/\b(import|from|def|class|return|for|in|if|elif|else|try|except|with|as|and|or|not|True|False|None|print|range|len|int|str|float|list|dict|type|lambda|yield|pass|break|continue|raise|global|nonlocal|assert|del)\b/g, (_, c) => ph('kw', c));
-  h = h.replace(/\b([a-z_][a-zA-Z_0-9]*)(\s*\()/g,  (_, fn, p) => ph('fn', fn) + p);
-  h = h.replace(/\b(\d+\.?\d*)\b/g,                  (_, n) => ph('nu', n));
-  h = h.replace(/\x00(\d+)\x00/g,                    (_, i) => parts[i]);
-  return h;
+  function tokenizeLine(line) {
+    // We'll walk the string character by character, emitting tokens
+    let out = '';
+    let i = 0;
+    while (i < line.length) {
+      // Comment
+      if (line[i] === '#') {
+        out += '<span class="cm">' + esc(line.slice(i)) + '</span>';
+        break;
+      }
+      // Triple-quoted strings (rare in single lines but handle anyway)
+      if ((line.slice(i,i+3) === '"""' || line.slice(i,i+3) === "'''")) {
+        const q = line.slice(i,i+3);
+        let j = i + 3;
+        while (j < line.length && line.slice(j,j+3) !== q) j++;
+        j += 3;
+        out += '<span class="st">' + esc(line.slice(i,j)) + '</span>';
+        i = j; continue;
+      }
+      // Single/double quoted string
+      if (line[i] === '"' || line[i] === "'") {
+        const q = line[i]; let j = i + 1;
+        while (j < line.length && line[j] !== q) { if (line[j] === '\\') j++; j++; }
+        j++;
+        out += '<span class="st">' + esc(line.slice(i,j)) + '</span>';
+        i = j; continue;
+      }
+      // Identifier or keyword
+      if (/[a-zA-Z_]/.test(line[i])) {
+        let j = i;
+        while (j < line.length && /\w/.test(line[j])) j++;
+        const word = line.slice(i,j);
+        if (KW.has(word)) {
+          out += '<span class="kw">' + word + '</span>';
+        } else if (j < line.length && /\s*\(/.test(line.slice(j))) {
+          out += '<span class="fn">' + word + '</span>';
+        } else {
+          out += word;
+        }
+        i = j; continue;
+      }
+      // Number
+      if (/\d/.test(line[i])) {
+        let j = i;
+        while (j < line.length && /[\d.]/.test(line[j])) j++;
+        out += '<span class="nu">' + line.slice(i,j) + '</span>';
+        i = j; continue;
+      }
+      // Anything else — escape and emit
+      out += esc(line[i]);
+      i++;
+    }
+    return out;
+  }
+
+  function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  return code.split('\n').map(tokenizeLine).join('\n');
 }
 
 // ── Copy to clipboard ──────────────────────────────────────────────────────
