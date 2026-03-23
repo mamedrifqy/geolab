@@ -1,322 +1,621 @@
 #!/usr/bin/env python3
 """
-GeoLab Site Builder
--------------------
-Scans the ./notebooks/ directory, reads all .ipynb files,
-and generates index.html in ./docs/ (for GitHub Pages).
+GeoLab Site Builder — Multi-Language Edition
+----------------------------------------------
+Scans three notebook folders and generates docs/index.html:
+
+  notebooks/python/  → .ipynb  (Jupyter / Python)
+  notebooks/gee/     → .js     (Google Earth Engine)
+  notebooks/r/       → .Rmd or .R  (R Notebooks)
 
 Run locally : python build.py
 Auto-run    : GitHub Actions triggers this on every push
 """
 
-import json
-import base64
-import os
-import re
-import sys
+import json, base64, os, re, sys
 from pathlib import Path
 from datetime import datetime
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 NOTEBOOKS_DIR = Path("notebooks")
-OUTPUT_DIR    = Path("docs")         # GitHub Pages serves from /docs
+OUTPUT_DIR    = Path("docs")
 OWNER_NAME    = "Mamed Rifqy"
 OWNER_URL     = "https://mamedrifqy.github.io/resume"
 SITE_TITLE    = "GeoLab · Notebook Portfolio"
 
-# ── CATEGORY & ICON INFERENCE ─────────────────────────────────────────────────
+# ── LANGUAGE DEFINITIONS ──────────────────────────────────────────────────────
+# Each language has an id, display name, colour accent, and folder path.
+LANGUAGES = [
+    {
+        "id":      "python",
+        "label":   "Python",
+        "icon":    "🐍",
+        "accent":  "#2d5a3d",       # forest green
+        "bg":      "#e8f2ec",
+        "folder":  NOTEBOOKS_DIR / "python",
+        "exts":    [".ipynb"],
+    },
+    {
+        "id":      "gee",
+        "label":   "Google Earth Engine",
+        "icon":    "🌍",
+        "accent":  "#1d4ed8",       # GEE blue
+        "bg":      "#eff6ff",
+        "folder":  NOTEBOOKS_DIR / "gee",
+        "exts":    [".js"],
+    },
+    {
+        "id":      "r",
+        "label":   "R Notebook",
+        "icon":    "📊",
+        "accent":  "#7c3aed",       # R purple
+        "bg":      "#f5f3ff",
+        "folder":  NOTEBOOKS_DIR / "r",
+        "exts":    [".Rmd", ".R"],
+    },
+]
+
+# ── CATEGORY INFERENCE (Python notebooks) ─────────────────────────────────────
 KEYWORD_MAP = {
-    "earthengine": ("Remote Sensing · GEE",   "🌿", "#52d68a"),
-    "mangrove":    ("Remote Sensing · GEE",   "🌿", "#52d68a"),
-    "rasterio":    ("Raster · Vector",        "🛰️", "#5eead4"),
-    "orthomosaic": ("Raster · Vector",        "🛰️", "#5eead4"),
-    "ecw":         ("Raster · Vector",        "🛰️", "#5eead4"),
-    "buffer":      ("Spatial Analysis",       "📍", "#fbbf24"),
-    "heatmap":     ("Spatial Analysis",       "📍", "#fbbf24"),
-    "minimarket":  ("Spatial Analysis",       "📍", "#fbbf24"),
-    "gdal":        ("Raster Processing",      "📐", "#f87171"),
-    "dem":         ("Raster Processing",      "📐", "#f87171"),
-    "tif":         ("Raster Processing",      "📐", "#f87171"),
-    "dms":         ("Utility · Coordinate",   "🧭", "#c084fc"),
-    "decimal":     ("Utility · Coordinate",   "🧭", "#c084fc"),
-    "degree":      ("Utility · Coordinate",   "🧭", "#c084fc"),
-    "geopandas":   ("Vector Analysis",        "🗺️", "#38bdf8"),
-    "shapely":     ("Vector Analysis",        "🗺️", "#38bdf8"),
+    "earthengine": ("Remote Sensing · GEE",  "🌿", "#2d5a3d"),
+    "mangrove":    ("Remote Sensing · GEE",  "🌿", "#2d5a3d"),
+    "rasterio":    ("Raster · Vector",       "🛰️", "#0f766e"),
+    "orthomosaic": ("Raster · Vector",       "🛰️", "#0f766e"),
+    "buffer":      ("Spatial Analysis",      "📍", "#b45309"),
+    "heatmap":     ("Spatial Analysis",      "📍", "#b45309"),
+    "gdal":        ("Raster Processing",     "📐", "#b91c1c"),
+    "dem":         ("Raster Processing",     "📐", "#b91c1c"),
+    "dms":         ("Utility · Coordinate",  "🧭", "#7c3aed"),
+    "decimal":     ("Utility · Coordinate",  "🧭", "#7c3aed"),
+    "geopandas":   ("Vector Analysis",       "🗺️", "#0369a1"),
 }
-DEFAULT_CATEGORY = ("Python · Geospatial", "📓", "#94a3b8")
+DEFAULT_CATEGORY = ("Python · Geospatial", "📓", "#4a5568")
 
 
-def infer_meta(filename: str, all_source: str):
-    """Guess icon, accent colour, and category from file name + cell source."""
-    combined = (filename + " " + all_source).lower()
+# ══════════════════════════════════════════════════════════════════════════════
+#  PARSERS — one per notebook type
+# ══════════════════════════════════════════════════════════════════════════════
+
+def parse_ipynb(path: Path, lang: dict) -> dict:
+    """Parse a Jupyter .ipynb file into the standard notebook dict."""
+    with open(path, encoding="utf-8") as f:
+        nb = json.load(f)
+
+    cells_raw  = nb.get("cells", [])
+    all_source = "\n".join("".join(c.get("source", [])) for c in cells_raw)
+
+    # Infer category/icon/accent from keywords
+    combined  = (path.name + " " + all_source).lower()
+    cat, icon, accent = DEFAULT_CATEGORY
     for kw, meta in KEYWORD_MAP.items():
         if kw in combined:
-            return meta
-    return DEFAULT_CATEGORY
+            cat, icon, accent = meta
+            break
+
+    # Pull the first markdown heading as the title
+    title = _first_heading_ipynb(cells_raw) or _title_from_filename(path.name)
+    desc  = _first_desc_ipynb(cells_raw)
+    tags  = _extract_packages(all_source)[:8]
+
+    cells_out = [
+        {"type": c["cell_type"], "source": "".join(c.get("source", []))}
+        for c in cells_raw
+        if "".join(c.get("source", [])).strip()
+    ]
+
+    return _notebook_dict(path, lang, title, cat, icon, accent, desc, tags, cells_out)
 
 
-def extract_packages(source: str) -> list[str]:
-    """Pull imported package names from cell source."""
-    pkgs = set()
-    for line in source.split("\n"):
-        line = line.strip()
-        if line.startswith("import "):
-            name = line.split()[1].split(".")[0]
-            pkgs.add(name)
-        elif line.startswith("from "):
-            name = line.split()[1].split(".")[0]
-            pkgs.add(name)
-        elif "pip install" in line:
-            parts = line.split()
-            for p in parts:
-                if not p.startswith("-") and p not in ("pip", "install", "!pip"):
-                    pkgs.add(p.split("==")[0].split(">=")[0])
-    ignore = {"__future__", "os", "sys", "re", "json", "math", "glob",
-               "pathlib", "typing", "dataclasses", "logging", "argparse",
-               "warnings", "datetime", "collections", "itertools", "functools"}
-    return sorted(pkgs - ignore)
+def parse_js(path: Path, lang: dict) -> dict:
+    """
+    Parse a GEE .js file.
+
+    GEE scripts are single files with no cell structure, but
+    authors typically use banner comments to mark sections:
+      // ── SECTION: Name ──────
+    We split on these to create pseudo-cells (markdown heading +
+    code block pairs), giving the reader a nice table of contents.
+    """
+    source = path.read_text(encoding="utf-8")
+
+    # Extract the file-level description from the top comment block
+    desc  = _js_description(source)
+    title = _js_title(source) or _title_from_filename(path.name)
+
+    # Split into sections by detecting banner-style comment headers
+    # Pattern: // ── SECTION: ... ── or // === ... === or // --- ... ---
+    section_pattern = re.compile(
+        r'^//\s*(?:──+|===+|---+)\s*(?:SECTION:\s*)?(.+?)\s*(?:──+|===+|---+)?\s*$',
+        re.MULTILINE
+    )
+
+    parts   = section_pattern.split(source)
+    cells   = []
+
+    if len(parts) == 1:
+        # No section headers found — emit as one big code cell
+        cells.append({"type": "code", "source": source.strip()})
+    else:
+        # parts[0] is the preamble (top comment block)
+        preamble = parts[0].strip()
+        if preamble:
+            cells.append({"type": "code", "source": preamble})
+
+        # Remaining parts alternate: section_name, section_code, ...
+        it = iter(parts[1:])
+        for section_name, section_code in zip(it, it):
+            section_name = section_name.strip()
+            section_code = section_code.strip()
+            if section_name:
+                cells.append({"type": "markdown", "source": f"## {section_name}"})
+            if section_code:
+                cells.append({"type": "code", "source": section_code})
+
+    # Count EE API calls as a rough "library" count
+    ee_calls = set(re.findall(r'\bee\.\w+', source))
+    tags     = sorted(["earthengine-api"] + list({
+        m.group(1) for m in re.finditer(r'\b(Map|Export|Chart|ui|Geometry)\b', source)
+    }))[:6]
+
+    return _notebook_dict(
+        path, lang, title,
+        "Remote Sensing · GEE", "🌍", lang["accent"],
+        desc, tags, cells
+    )
 
 
-def title_from_filename(fname: str) -> str:
-    """Convert filename to readable title."""
-    stem = Path(fname).stem
-    stem = stem.replace("_FINAL_FIXED", "").replace("_FINAL", "")
-    stem = re.sub(r"[-_]", " ", stem)
-    stem = re.sub(r"\s+", " ", stem).strip()
-    return stem.title()
+def parse_rmd(path: Path, lang: dict) -> dict:
+    """
+    Parse an R Markdown (.Rmd) or pure R (.R) file.
+
+    .Rmd files interleave markdown prose and fenced R code chunks:
+        ```{r chunk-name}
+        # R code
+        ```
+    We parse them into alternating markdown/code cell pairs,
+    exactly like Jupyter notebooks but from a different source format.
+
+    .R files are treated as a single code cell, split on
+    section header comments (# ── Section ──).
+    """
+    source = path.read_text(encoding="utf-8")
+
+    if path.suffix.lower() == ".rmd":
+        cells = _parse_rmd_cells(source)
+        title = _rmd_frontmatter(source, "title") or _title_from_filename(path.name)
+        desc  = _rmd_frontmatter(source, "description") or _first_desc_rmd(source)
+    else:
+        # Pure .R script — split on section comments
+        cells = _parse_r_script(source)
+        title = _title_from_filename(path.name)
+        desc  = _r_description(source)
+
+    tags = _extract_r_packages(source)[:8]
+
+    return _notebook_dict(
+        path, lang, title,
+        "Statistical Analysis · R", "📊", lang["accent"],
+        desc, tags, cells
+    )
 
 
-def first_heading(cells: list) -> str | None:
-    """Extract first markdown heading as notebook title."""
-    for cell in cells:
-        if cell.get("cell_type") == "markdown":
-            src = "".join(cell.get("source", []))
-            m = re.match(r"^#{1,2}\s+(.+)$", src, re.MULTILINE)
-            if m:
-                title = m.group(1).strip()
-                title = re.sub(r"[*_`#]", "", title)
-                title = re.sub(r"FIXED VERSION.*", "", title, flags=re.IGNORECASE)
-                return title.strip(" -–").strip()
+# ── Rmd helpers ──────────────────────────────────────────────────────────────
+
+def _rmd_frontmatter(source: str, field: str) -> str | None:
+    """Extract a YAML frontmatter field from an .Rmd file."""
+    fm = re.match(r'^---\n([\s\S]*?)\n---', source)
+    if not fm:
+        return None
+    for line in fm.group(1).split("\n"):
+        if line.lower().startswith(field + ":"):
+            val = line.split(":", 1)[1].strip().strip('"').strip("'")
+            return val or None
     return None
 
 
-def first_description(cells: list) -> str:
-    """Extract first meaningful prose paragraph from markdown cells."""
+def _parse_rmd_cells(source: str) -> list[dict]:
+    """
+    Split an .Rmd document into alternating markdown and code cells.
+    Code chunks are delimited by ```{r ...} ... ```.
+    """
+    # Remove YAML frontmatter first
+    source = re.sub(r'^---\n[\s\S]*?\n---\n?', '', source)
+
+    chunk_pattern = re.compile(r'```\{r[^}]*\}\n([\s\S]*?)```', re.MULTILINE)
+    cells  = []
+    cursor = 0
+
+    for match in chunk_pattern.finditer(source):
+        # Markdown text before this chunk
+        md = source[cursor:match.start()].strip()
+        if md:
+            cells.append({"type": "markdown", "source": md})
+        # The R code chunk itself
+        code = match.group(1).strip()
+        if code:
+            cells.append({"type": "code", "source": code})
+        cursor = match.end()
+
+    # Any trailing markdown after the last chunk
+    tail = source[cursor:].strip()
+    if tail:
+        cells.append({"type": "markdown", "source": tail})
+
+    return cells
+
+
+def _parse_r_script(source: str) -> list[dict]:
+    """Split a pure .R script on section-header comments."""
+    section_pattern = re.compile(
+        r'^#+\s*(?:──+|===+|---+)\s*(.+?)\s*(?:──+|===+|---+)?\s*$',
+        re.MULTILINE
+    )
+    parts = section_pattern.split(source)
+    cells = []
+    if len(parts) == 1:
+        cells.append({"type": "code", "source": source.strip()})
+    else:
+        preamble = parts[0].strip()
+        if preamble:
+            cells.append({"type": "code", "source": preamble})
+        it = iter(parts[1:])
+        for name, code in zip(it, it):
+            if name.strip():
+                cells.append({"type": "markdown", "source": f"## {name.strip()}"})
+            if code.strip():
+                cells.append({"type": "code", "source": code.strip()})
+    return cells
+
+
+def _extract_r_packages(source: str) -> list[str]:
+    """Find library() and require() calls in R source."""
+    pkgs = set()
+    for m in re.finditer(r'(?:library|require)\(\s*(["\']?)(\w+)\1\s*\)', source):
+        pkgs.add(m.group(2))
+    return sorted(pkgs)
+
+
+def _first_desc_rmd(source: str) -> str:
+    """Pull the first prose paragraph from an Rmd (after frontmatter)."""
+    source = re.sub(r'^---\n[\s\S]*?\n---\n?', '', source)
+    for para in source.split('\n\n'):
+        para = para.strip()
+        if para and not para.startswith('#') and not para.startswith('```') and len(para) > 40:
+            return para[:200]
+    return "An R Markdown notebook."
+
+
+def _r_description(source: str) -> str:
+    """Pull a description from the leading comment block of a .R script."""
+    lines = []
+    for line in source.split('\n'):
+        line = line.strip()
+        if line.startswith('#'):
+            text = re.sub(r'^#+\s*', '', line).strip()
+            if text and not re.match(r'^[=\-─]+$', text):
+                lines.append(text)
+        elif lines:
+            break
+    return ' '.join(lines)[:200] if lines else "An R script."
+
+
+# ── JS helpers ───────────────────────────────────────────────────────────────
+
+def _js_title(source: str) -> str | None:
+    """Extract a title from the leading comment block of a .js file."""
+    m = re.search(r'^//\s+(.+)', source, re.MULTILINE)
+    if m:
+        title = m.group(1).strip().strip('=─-').strip()
+        if len(title) < 80:
+            return title
+    return None
+
+
+def _js_description(source: str) -> str:
+    """Extract a description from the leading block comment."""
+    lines = []
+    for line in source.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('//'):
+            text = re.sub(r'^//\s*', '', stripped).strip()
+            # Skip separator lines and single-word labels
+            if text and not re.match(r'^[=─\-]+$', text) and len(text) > 5:
+                lines.append(text)
+        elif stripped == '':
+            if lines:
+                break
+        else:
+            break
+    return ' '.join(lines[1:])[:220] if len(lines) > 1 else "A Google Earth Engine script."
+
+
+# ── Shared helpers ────────────────────────────────────────────────────────────
+
+def _title_from_filename(fname: str) -> str:
+    stem = re.sub(r'(_FINAL_FIXED|_FINAL|_v\d+)', '', Path(fname).stem)
+    stem = re.sub(r'[-_]', ' ', stem)
+    return re.sub(r'\s+', ' ', stem).strip().title()
+
+
+def _first_heading_ipynb(cells: list) -> str | None:
     for cell in cells:
         if cell.get("cell_type") == "markdown":
             src = "".join(cell.get("source", []))
-            lines = [l.strip() for l in src.split("\n") if l.strip()]
-            for line in lines:
-                if not line.startswith("#") and not line.startswith("!") \
-                   and not line.startswith("-") and len(line) > 40:
+            m = re.match(r'^#{1,2}\s+(.+)$', src, re.MULTILINE)
+            if m:
+                t = re.sub(r'[*_`#]', '', m.group(1))
+                t = re.sub(r'FIXED VERSION.*', '', t, flags=re.I)
+                return t.strip(' -–').strip()
+    return None
+
+
+def _first_desc_ipynb(cells: list) -> str:
+    for cell in cells:
+        if cell.get("cell_type") == "markdown":
+            src = "".join(cell.get("source", []))
+            for line in src.split('\n'):
+                line = line.strip()
+                if not line.startswith('#') and len(line) > 40:
                     return line[:220]
     return "A Python geospatial notebook."
 
 
-def parse_notebook(path: Path) -> dict:
-    """Parse a single .ipynb and return structured metadata + cells."""
-    with open(path, encoding="utf-8") as f:
-        nb = json.load(f)
+def _extract_packages(source: str) -> list[str]:
+    pkgs = set()
+    ignore = {"os","sys","re","json","math","glob","pathlib","typing",
+               "dataclasses","logging","argparse","warnings","datetime",
+               "collections","itertools","functools","__future__"}
+    for line in source.split('\n'):
+        line = line.strip()
+        if line.startswith('import '):
+            pkgs.add(line.split()[1].split('.')[0])
+        elif line.startswith('from '):
+            pkgs.add(line.split()[1].split('.')[0])
+        elif 'pip install' in line:
+            for p in line.split():
+                if not p.startswith('-') and p not in ('pip','install','!pip','-q'):
+                    pkgs.add(p.split('==')[0].split('>=')[0])
+    return sorted(pkgs - ignore)
 
-    cells_raw = nb.get("cells", [])
-    all_source = "\n".join("".join(c.get("source", [])) for c in cells_raw)
 
-    category, icon, accent = infer_meta(path.name, all_source)
-    title = first_heading(cells_raw) or title_from_filename(path.name)
-    short = title[:40] + ("…" if len(title) > 40 else "")
-    desc  = first_description(cells_raw)
-    tags  = extract_packages(all_source)[:8]
-
-    cells_out = []
-    for cell in cells_raw:
-        src = "".join(cell.get("source", []))
-        if src.strip():
-            cells_out.append({"type": cell["cell_type"], "source": src})
-
-    with open(path, "rb") as f:
+def _notebook_dict(path, lang, title, category, icon, accent, desc, tags, cells):
+    with open(path, 'rb') as f:
         b64 = base64.b64encode(f.read()).decode()
-
-    nb_id = re.sub(r"[^a-z0-9]", "_", path.stem.lower())[:30]
-
+    nb_id = re.sub(r'[^a-z0-9]', '_', path.stem.lower())[:40]
     return {
-        "id":       nb_id,
-        "filename": path.name,
-        "title":    title,
-        "short":    short,
-        "icon":     icon,
-        "accent":   accent,
-        "category": category,
-        "desc":     desc,
-        "tags":     tags,
-        "cells":    cells_out,
-        "b64":      b64,
-        "mtime":    os.path.getmtime(path),
+        "id":         nb_id,
+        "filename":   path.name,
+        "title":      title,
+        "short":      title[:42] + ('…' if len(title) > 42 else ''),
+        "icon":       icon,
+        "accent":     accent,
+        "category":   category,
+        "desc":       desc,
+        "tags":       tags,
+        "cells":      cells,
+        "b64":        b64,
+        "mtime":      os.path.getmtime(path),
+        "lang":       lang["id"],
+        "lang_label": lang["label"],
+        "lang_icon":  lang["icon"],
+        "lang_accent":lang["accent"],
+        "lang_bg":    lang["bg"],
     }
 
 
-def build_site(notebooks: list[dict]) -> str:
-    """Render the full HTML site as a string."""
-    notebooks  = sorted(notebooks, key=lambda n: n["mtime"], reverse=True)
-    nb_json    = json.dumps(notebooks, ensure_ascii=False)
-    build_ts   = datetime.now().strftime("%d %b %Y, %H:%M")
-    count      = len(notebooks)
-    total_pkgs = len(set(t for nb in notebooks for t in nb["tags"]))
+# ══════════════════════════════════════════════════════════════════════════════
+#  SITE BUILDER
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_site(all_notebooks: list[dict]) -> str:
+    nb_json   = json.dumps(all_notebooks, ensure_ascii=False)
+    build_ts  = datetime.now().strftime("%d %b %Y, %H:%M")
+
+    # Group notebooks by language for sidebar sections and stats
+    by_lang = {}
+    for lang in LANGUAGES:
+        by_lang[lang["id"]] = [n for n in all_notebooks if n["lang"] == lang["id"]]
+
+    total_pkgs = len(set(t for nb in all_notebooks for t in nb["tags"]))
+    count      = len(all_notebooks)
+    nb_count_label = f"{count} notebook{'s' if count!=1 else ''}"
 
     src_dir = Path(__file__).parent / "src"
     css = (src_dir / "style.css").read_text(encoding="utf-8") if (src_dir / "style.css").exists() else ""
     js  = (src_dir / "app.js").read_text(encoding="utf-8")   if (src_dir / "app.js").exists()   else ""
 
-    nb_plural = "s" if count != 1 else ""
+    # Build sidebar sections HTML
+    sidebar_sections = ""
+    for lang in LANGUAGES:
+        nbs = by_lang[lang["id"]]
+        if not nbs:
+            continue
+        sidebar_sections += (
+            f'  <div class="sidebar-section-label">'
+            f'<span style="color:{lang["accent"]}">{lang["icon"]}</span> {lang["label"]}'
+            f'</div>\n'
+        )
+        for nb in sorted(nbs, key=lambda n: n["mtime"], reverse=True):
+            sidebar_sections += (
+                f'  <div class="nb-item" id="nav-{nb["id"]}" '
+                f'onclick="showNotebook(\'{nb["id"]}\')">'
+                f'<span class="nb-icon">{nb["icon"]}</span>'
+                f'<div><div class="nb-name">{nb["short"]}</div>'
+                f'<div class="nb-cat">{nb["category"]}</div></div>'
+                f'</div>\n'
+            )
 
-    lines = [
-        '<!DOCTYPE html>',
-        '<html lang="en">',
-        '<head>',
-        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
-        '<meta name="theme-color" content="#2d5a3d">',
-        f'<title>{SITE_TITLE}</title>',
-        '<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>🌿</text></svg>">',
-        '<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">',
-        f'<style>{css}</style>',
-        '</head>',
-        '<body>',
-        '',
-        '<!-- Drawer overlay (mobile) -->',
-        '<div class="sidebar-overlay"></div>',
-        '',
-        '<!-- SIDEBAR -->',
-        '<nav class="sidebar">',
-        '  <div class="sidebar-header">',
-        '    <div>',
-        '      <div class="logo">Geo<span>Lab</span></div>',
-        '      <div class="logo-sub">The Spatial Editorial</div>',
-        '    </div>',
-        '    <button class="sidebar-close" aria-label="Close menu">&#10005;</button>',
-        '  </div>',
-        '  <div class="care-outlook">',
-        '    <div class="care-label">Collection Outlook</div>',
-        '    <div class="care-row">',
-        '      <div class="care-icon green">\U0001f4d3</div>',
-        f'      <div><div class="care-text">Notebooks</div><div class="care-sub">{count} active specimen{nb_plural}</div></div>',
-        '    </div>',
-        '    <div class="care-row">',
-        '      <div class="care-icon amber">\U0001f4e6</div>',
-        f'      <div><div class="care-text">Libraries</div><div class="care-sub">{total_pkgs} unique packages</div></div>',
-        '    </div>',
-        '    <button class="btn-primary" onclick="showLanding()">View Collection</button>',
-        '  </div>',
-        '  <div class="sidebar-section-label">Notebooks</div>',
-        '  <div class="sidebar-list" id="sidebarList"></div>',
-        '  <div class="sidebar-footer">',
-        f'    <a href="{OWNER_URL}" target="_blank" class="sf-link"><span class="sf-icon">\U0001f464</span>{OWNER_NAME}</a>',
-        '  </div>',
-        '</nav>',
-        '',
-        '<!-- MAIN -->',
-        '<div class="layout">',
-        '  <div class="content-wrap">',
-        '    <div class="topbar">',
-        '      <div style="display:flex;align-items:center;gap:.5rem;min-width:0">',
-        '        <button class="menu-toggle" aria-label="Open menu">',
-        '          <span></span><span></span><span></span>',
-        '        </button>',
-        '        <div class="breadcrumb">',
-        '          <span class="bc-home" onclick="showLanding()">GeoLab</span>',
-        '          <span class="sep">/</span>',
-        '          <span class="current" id="breadcrumbCurrent">Overview</span>',
-        '        </div>',
-        '      </div>',
-        '      <div class="topbar-actions">',
-        '        <button class="btn-home" id="homeBtn" onclick="showLanding()">&#8592; All</button>',
-        '        <a class="btn-dl" id="dlBtn" href="#" download>',
-        '          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M5 7l3 3 3-3M2 13h12"/></svg>',
-        '          Download .ipynb',
-        '        </a>',
-        '      </div>',
-        '    </div>',
-        '    <div class="page-area">',
-        '      <div class="nb-content" id="nbContent"></div>',
-        '      <div class="toc-panel" id="tocPanel">',
-        '        <div class="toc-label">On this page</div>',
-        '        <ul class="toc-list" id="tocList"></ul>',
-        '      </div>',
-        '    </div>',
-        '  </div>',
-        '</div>',
-        '',
-        '<!-- DESKTOP FOOTER -->',
-        '<footer class="site-footer">',
-        '  <div class="footer-inner">',
-        '    <div class="footer-left">',
-        '      <span class="footer-logo">Geo<span>Lab</span></span>',
-        '      <span class="footer-dot">&middot;</span>',
-        '      <span class="footer-tag">Geospatial Python Notebooks</span>',
-        '    </div>',
-        f'    <div class="footer-center">Built &amp; maintained by <a href="{OWNER_URL}" target="_blank" rel="noopener">{OWNER_NAME}</a></div>',
-        '    <div class="footer-right">',
-        f'      <span>Last built: {build_ts}</span><span class="footer-dot">&middot;</span><span>{count} notebook{nb_plural}</span>',
-        '    </div>',
-        '  </div>',
-        '</footer>',
-        '',
-        '<!-- MOBILE BOTTOM NAV -->',
-        '<nav class="mobile-nav">',
-        '  <button class="mob-nav-btn active" id="mob-home" onclick="showLanding()">',
-        '    <span class="mob-icon">&#127968;</span>',
-        '    <span class="mob-label">Home</span>',
-        '  </button>',
-        '  <button class="mob-nav-btn" id="mob-notebooks" onclick="openDrawer()">',
-        '    <span class="mob-icon">&#128218;</span>',
-        '    <span class="mob-label">Notebooks</span>',
-        '  </button>',
-        f'  <a class="mob-nav-btn" href="{OWNER_URL}" target="_blank">',
-        '    <span class="mob-icon">&#128100;</span>',
-        '    <span class="mob-label">Author</span>',
-        '  </a>',
-        '</nav>',
-        '',
-        '<!-- MOBILE FLOATING DOWNLOAD -->',
-        '<a class="mob-dl-btn" id="mobDlBtn" href="#" download>',
-        '  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M5 7l3 3 3-3M2 13h12"/></svg>',
-        '  Download',
-        '</a>',
-        '',
-        '<script>',
-        f'const NOTEBOOKS = {nb_json};',
-        f'const BUILD_DATE = "{build_ts}";',
-        js,
-        '</script>',
-        '</body>',
-        '</html>',
-    ]
+    # Language stats for the care outlook widget
+    care_rows = ""
+    for lang in LANGUAGES:
+        n = len(by_lang[lang["id"]])
+        if n == 0:
+            continue
+        care_rows += (
+            f'    <div class="care-row">'
+            f'<div class="care-icon" style="background:{lang["bg"]}">{lang["icon"]}</div>'
+            f'<div><div class="care-text">{lang["label"]}</div>'
+            f'<div class="care-sub">{n} notebook{"s" if n!=1 else ""}</div></div>'
+            f'</div>\n'
+        )
 
-    return '\n'.join(lines)
+    html = (
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        "<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
+        f"<title>{SITE_TITLE}</title>\n"
+        "<link href=\"https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1"
+        "&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400"
+        "&family=DM+Mono:wght@300;400;500&display=swap\" rel=\"stylesheet\">\n"
+        f"<style>{css}</style>\n"
+        "</head>\n<body>\n\n"
+
+        "<!-- Drawer overlay -->\n"
+        "<div class=\"drawer-overlay\" id=\"drawerOverlay\" onclick=\"closeDrawer()\"></div>\n\n"
+
+        "<nav class=\"sidebar\" id=\"sidebar\">\n"
+        "  <div class=\"sidebar-header\">\n"
+        "    <div class=\"logo\">Geo<span>Lab</span></div>\n"
+        "    <div class=\"logo-sub\">The Spatial Editorial</div>\n"
+        "  </div>\n"
+        "  <div class=\"care-outlook\">\n"
+        "    <div class=\"care-label\">Collection Outlook</div>\n"
+        + care_rows +
+        "    <button class=\"btn-primary\" onclick=\"showLanding()\">View Collection</button>\n"
+        "  </div>\n"
+        + sidebar_sections +
+        "  <div class=\"sidebar-footer\">\n"
+        f"    <a href=\"{OWNER_URL}\" target=\"_blank\" class=\"sf-link\">👤 {OWNER_NAME}</a>\n"
+        "  </div>\n"
+        "</nav>\n\n"
+
+        "<div class=\"layout\">\n"
+        "  <div class=\"content-wrap\">\n"
+        "    <div class=\"topbar\">\n"
+        "      <div style=\"display:flex;align-items:center;gap:.6rem\">\n"
+        "        <button class=\"btn-menu\" onclick=\"openDrawer()\" aria-label=\"Menu\">\n"
+        "          <svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\">"
+        "<path d=\"M3 5h14M3 10h14M3 15h14\"/></svg>\n"
+        "        </button>\n"
+        "        <div class=\"breadcrumb\">\n"
+        "          <span class=\"bc-home\" onclick=\"showLanding()\">GeoLab</span>\n"
+        "          <span class=\"sep\">/</span>\n"
+        "          <span class=\"current\" id=\"breadcrumbCurrent\">Overview</span>\n"
+        "        </div>\n"
+        "      </div>\n"
+        "      <div class=\"topbar-actions\">\n"
+        "        <button class=\"btn-home\" id=\"homeBtn\" onclick=\"showLanding()\">&#8592; All</button>\n"
+        "        <a class=\"btn-dl\" id=\"dlBtn\" href=\"#\" download>\n"
+        "          <svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\">"
+        "<path d=\"M8 2v8M5 7l3 3 3-3M2 13h12\"/></svg>\n"
+        "          <span>Download</span>\n"
+        "        </a>\n"
+        "      </div>\n"
+        "    </div>\n"
+        "    <div class=\"page-area\">\n"
+        "      <div class=\"nb-content\" id=\"nbContent\"></div>\n"
+        "      <div class=\"toc-panel\" id=\"tocPanel\">\n"
+        "        <div class=\"toc-label\">On this page</div>\n"
+        "        <ul class=\"toc-list\" id=\"tocList\"></ul>\n"
+        "      </div>\n"
+        "    </div>\n"
+        "  </div>\n"
+        "</div>\n\n"
+
+        "<footer class=\"site-footer\">\n"
+        "  <div class=\"footer-inner\">\n"
+        "    <div class=\"footer-left\">\n"
+        "      <span class=\"footer-logo\">Geo<span>Lab</span></span>\n"
+        "      <span class=\"footer-dot\">&middot;</span>\n"
+        "      <span class=\"footer-tag\">Geospatial Notebook Portfolio</span>\n"
+        "    </div>\n"
+        f"    <div class=\"footer-center\">Built &amp; maintained by "
+        f"<a href=\"{OWNER_URL}\" target=\"_blank\" rel=\"noopener\">{OWNER_NAME}</a></div>\n"
+        "    <div class=\"footer-right\">\n"
+        f"      <span>Last built: {build_ts}</span>"
+        f"<span class=\"footer-dot\">&middot;</span>"
+        f"<span>{nb_count_label}</span>\n"
+        "    </div>\n"
+        "  </div>\n"
+        "</footer>\n\n"
+
+        "<nav class=\"bottom-nav\" id=\"bottomNav\">\n"
+        "  <button class=\"bn-tab active\" data-tab=\"home\" onclick=\"showLanding()\">\n"
+        "    <span class=\"bn-icon\">🏠</span><span class=\"bn-label\">Home</span>\n"
+        "  </button>\n"
+        "  <button class=\"bn-tab\" data-tab=\"browse\" onclick=\"openDrawer()\">\n"
+        "    <span class=\"bn-icon\">📚</span><span class=\"bn-label\">Browse</span>\n"
+        "  </button>\n"
+        "  <button class=\"bn-tab\" id=\"dlTabBtn\" data-tab=\"dl\" "
+        "onclick=\"document.getElementById('dlBtn').click()\" style=\"display:none\">\n"
+        "    <span class=\"bn-icon\">⬇️</span><span class=\"bn-label\">Download</span>\n"
+        "  </button>\n"
+        f"  <a class=\"bn-tab\" data-tab=\"profile\" href=\"{OWNER_URL}\" "
+        "target=\"_blank\" style=\"text-decoration:none\">\n"
+        "    <span class=\"bn-icon\">👤</span><span class=\"bn-label\">About</span>\n"
+        "  </a>\n"
+        "</nav>\n\n"
+
+        "<script>\n"
+        f"const NOTEBOOKS = {nb_json};\n"
+        f"const BUILD_DATE = \"{build_ts}\";\n"
+        f"const LANGUAGES = {json.dumps([{'id':l['id'],'label':l['label'],'icon':l['icon'],'accent':l['accent'],'bg':l['bg']} for l in LANGUAGES])};\n"
+        f"{js}\n"
+        "</script>\n"
+        "</body>\n</html>\n"
+    )
+    return html
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════════
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    all_notebooks = []
 
-    ipynb_files = sorted(NOTEBOOKS_DIR.glob("*.ipynb"))
-    if not ipynb_files:
-        print("⚠  No .ipynb files found in notebooks/")
+    for lang in LANGUAGES:
+        folder = lang["folder"]
+        if not folder.exists():
+            folder.mkdir(parents=True, exist_ok=True)
+            print(f"   Created folder: {folder}/")
+            continue
+
+        files = []
+        for ext in lang["exts"]:
+            files.extend(folder.glob(f"*{ext}"))
+        files = sorted(files)
+
+        if not files:
+            print(f"   [{lang['label']}] — no files found in {folder}/")
+            continue
+
+        print(f"\n{lang['icon']}  {lang['label']} ({len(files)} file(s)):")
+        for p in files:
+            print(f"   • {p.name}")
+            try:
+                if lang["id"] == "python":
+                    nb = parse_ipynb(p, lang)
+                elif lang["id"] == "gee":
+                    nb = parse_js(p, lang)
+                else:
+                    nb = parse_rmd(p, lang)
+                all_notebooks.append(nb)
+            except Exception as e:
+                print(f"     ⚠  Skipped ({e})")
+
+    if not all_notebooks:
+        print("\n⚠  No notebooks found in any folder.")
         sys.exit(1)
 
-    print(f"📓 Found {len(ipynb_files)} notebook(s):")
-    notebooks = []
-    for p in ipynb_files:
-        print(f"   • {p.name}")
-        nb = parse_notebook(p)
-        notebooks.append(nb)
-
-    html = build_site(notebooks)
-
+    html     = build_site(all_notebooks)
     out_path = OUTPUT_DIR / "index.html"
     out_path.write_text(html, encoding="utf-8")
-    size_kb = out_path.stat().st_size // 1024
+    size_kb  = out_path.stat().st_size // 1024
+
     print(f"\n✅ Built: {out_path}  ({size_kb} KB)")
-    print(f"   Notebooks : {len(notebooks)}")
-    print(f"   Timestamp : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   Total notebooks : {len(all_notebooks)}")
+    print(f"   Timestamp       : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 if __name__ == "__main__":
