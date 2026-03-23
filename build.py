@@ -156,97 +156,142 @@ def parse_notebook(path: Path) -> dict:
 
 def build_site(notebooks: list[dict]) -> str:
     """Render the full HTML site as a string."""
-    # Sort newest first by modification time
-    notebooks = sorted(notebooks, key=lambda n: n["mtime"], reverse=True)
-    nb_json   = json.dumps(notebooks, ensure_ascii=False)
-    build_ts  = datetime.now().strftime("%d %b %Y, %H:%M")
-    count     = len(notebooks)
+    notebooks  = sorted(notebooks, key=lambda n: n["mtime"], reverse=True)
+    nb_json    = json.dumps(notebooks, ensure_ascii=False)
+    build_ts   = datetime.now().strftime("%d %b %Y, %H:%M")
+    count      = len(notebooks)
+    total_pkgs = len(set(t for nb in notebooks for t in nb["tags"]))
 
-    # ── Load static assets ───────────────────────────────────────────────────
     src_dir = Path(__file__).parent / "src"
-    css_file = src_dir / "style.css"
-    js_file  = src_dir / "app.js"
+    css = (src_dir / "style.css").read_text(encoding="utf-8") if (src_dir / "style.css").exists() else ""
+    js  = (src_dir / "app.js").read_text(encoding="utf-8")   if (src_dir / "app.js").exists()   else ""
 
-    css = css_file.read_text(encoding="utf-8") if css_file.exists() else ""
-    js  = js_file.read_text(encoding="utf-8")  if js_file.exists()  else ""
+    nb_plural = "s" if count != 1 else ""
 
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{SITE_TITLE}</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Lora:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
-<style>{css}</style>
-</head>
-<body>
+    lines = [
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+        '<meta name="theme-color" content="#2d5a3d">',
+        f'<title>{SITE_TITLE}</title>',
+        '<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>🌿</text></svg>">',
+        '<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">',
+        f'<style>{css}</style>',
+        '</head>',
+        '<body>',
+        '',
+        '<!-- Drawer overlay (mobile) -->',
+        '<div class="sidebar-overlay"></div>',
+        '',
+        '<!-- SIDEBAR -->',
+        '<nav class="sidebar">',
+        '  <div class="sidebar-header">',
+        '    <div>',
+        '      <div class="logo">Geo<span>Lab</span></div>',
+        '      <div class="logo-sub">The Spatial Editorial</div>',
+        '    </div>',
+        '    <button class="sidebar-close" aria-label="Close menu">&#10005;</button>',
+        '  </div>',
+        '  <div class="care-outlook">',
+        '    <div class="care-label">Collection Outlook</div>',
+        '    <div class="care-row">',
+        '      <div class="care-icon green">\U0001f4d3</div>',
+        f'      <div><div class="care-text">Notebooks</div><div class="care-sub">{count} active specimen{nb_plural}</div></div>',
+        '    </div>',
+        '    <div class="care-row">',
+        '      <div class="care-icon amber">\U0001f4e6</div>',
+        f'      <div><div class="care-text">Libraries</div><div class="care-sub">{total_pkgs} unique packages</div></div>',
+        '    </div>',
+        '    <button class="btn-primary" onclick="showLanding()">View Collection</button>',
+        '  </div>',
+        '  <div class="sidebar-section-label">Notebooks</div>',
+        '  <div class="sidebar-list" id="sidebarList"></div>',
+        '  <div class="sidebar-footer">',
+        f'    <a href="{OWNER_URL}" target="_blank" class="sf-link"><span class="sf-icon">\U0001f464</span>{OWNER_NAME}</a>',
+        '  </div>',
+        '</nav>',
+        '',
+        '<!-- MAIN -->',
+        '<div class="layout">',
+        '  <div class="content-wrap">',
+        '    <div class="topbar">',
+        '      <div style="display:flex;align-items:center;gap:.5rem;min-width:0">',
+        '        <button class="menu-toggle" aria-label="Open menu">',
+        '          <span></span><span></span><span></span>',
+        '        </button>',
+        '        <div class="breadcrumb">',
+        '          <span class="bc-home" onclick="showLanding()">GeoLab</span>',
+        '          <span class="sep">/</span>',
+        '          <span class="current" id="breadcrumbCurrent">Overview</span>',
+        '        </div>',
+        '      </div>',
+        '      <div class="topbar-actions">',
+        '        <button class="btn-home" id="homeBtn" onclick="showLanding()">&#8592; All</button>',
+        '        <a class="btn-dl" id="dlBtn" href="#" download>',
+        '          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M5 7l3 3 3-3M2 13h12"/></svg>',
+        '          Download .ipynb',
+        '        </a>',
+        '      </div>',
+        '    </div>',
+        '    <div class="page-area">',
+        '      <div class="nb-content" id="nbContent"></div>',
+        '      <div class="toc-panel" id="tocPanel">',
+        '        <div class="toc-label">On this page</div>',
+        '        <ul class="toc-list" id="tocList"></ul>',
+        '      </div>',
+        '    </div>',
+        '  </div>',
+        '</div>',
+        '',
+        '<!-- DESKTOP FOOTER -->',
+        '<footer class="site-footer">',
+        '  <div class="footer-inner">',
+        '    <div class="footer-left">',
+        '      <span class="footer-logo">Geo<span>Lab</span></span>',
+        '      <span class="footer-dot">&middot;</span>',
+        '      <span class="footer-tag">Geospatial Python Notebooks</span>',
+        '    </div>',
+        f'    <div class="footer-center">Built &amp; maintained by <a href="{OWNER_URL}" target="_blank" rel="noopener">{OWNER_NAME}</a></div>',
+        '    <div class="footer-right">',
+        f'      <span>Last built: {build_ts}</span><span class="footer-dot">&middot;</span><span>{count} notebook{nb_plural}</span>',
+        '    </div>',
+        '  </div>',
+        '</footer>',
+        '',
+        '<!-- MOBILE BOTTOM NAV -->',
+        '<nav class="mobile-nav">',
+        '  <button class="mob-nav-btn active" id="mob-home" onclick="showLanding()">',
+        '    <span class="mob-icon">&#127968;</span>',
+        '    <span class="mob-label">Home</span>',
+        '  </button>',
+        '  <button class="mob-nav-btn" id="mob-notebooks" onclick="openDrawer()">',
+        '    <span class="mob-icon">&#128218;</span>',
+        '    <span class="mob-label">Notebooks</span>',
+        '  </button>',
+        f'  <a class="mob-nav-btn" href="{OWNER_URL}" target="_blank">',
+        '    <span class="mob-icon">&#128100;</span>',
+        '    <span class="mob-label">Author</span>',
+        '  </a>',
+        '</nav>',
+        '',
+        '<!-- MOBILE FLOATING DOWNLOAD -->',
+        '<a class="mob-dl-btn" id="mobDlBtn" href="#" download>',
+        '  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v8M5 7l3 3 3-3M2 13h12"/></svg>',
+        '  Download',
+        '</a>',
+        '',
+        '<script>',
+        f'const NOTEBOOKS = {nb_json};',
+        f'const BUILD_DATE = "{build_ts}";',
+        js,
+        '</script>',
+        '</body>',
+        '</html>',
+    ]
 
-<nav class="sidebar">
-  <div class="sidebar-header">
-    <div class="logo">Geo<span>Lab</span></div>
-    <div class="logo-sub">Notebook Portfolio</div>
-  </div>
-  <div class="sidebar-section-label">Notebooks</div>
-  <div class="sidebar-list" id="sidebarList"></div>
-  <div class="sidebar-footer">{count} notebook{'s' if count!=1 else ''} &middot; Python 3</div>
-</nav>
+    return '\n'.join(lines)
 
-<div class="layout">
-  <div class="content-wrap">
-    <div class="topbar">
-      <div class="breadcrumb">
-        <span class="bc-home" onclick="showLanding()">GeoLab</span>
-        <span class="sep">/</span>
-        <span class="current" id="breadcrumbCurrent">Overview</span>
-      </div>
-      <div class="topbar-actions">
-        <button class="btn-home" id="homeBtn" onclick="showLanding()">&#8592; All</button>
-        <a class="btn-dl" id="dlBtn" href="#" download>
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M8 2v8M5 7l3 3 3-3M2 13h12"/>
-          </svg>
-          Download .ipynb
-        </a>
-      </div>
-    </div>
-
-    <div class="page-area">
-      <div class="nb-content" id="nbContent"></div>
-      <div class="toc-panel" id="tocPanel">
-        <div class="toc-label">On this page</div>
-        <ul class="toc-list" id="tocList"></ul>
-      </div>
-    </div>
-  </div>
-</div>
-
-<footer class="site-footer">
-  <div class="footer-inner">
-    <div class="footer-left">
-      <span class="footer-logo">Geo<span>Lab</span></span>
-      <span class="footer-dot">&middot;</span>
-      <span class="footer-tag">Geospatial Python Notebooks</span>
-    </div>
-    <div class="footer-center">
-      Built &amp; maintained by
-      <a href="{OWNER_URL}" target="_blank" rel="noopener">{OWNER_NAME}</a>
-    </div>
-    <div class="footer-right">
-      <span>Last built: {build_ts}</span>
-      <span class="footer-dot">&middot;</span>
-      <span>{count} notebook{'s' if count!=1 else ''}</span>
-    </div>
-  </div>
-</footer>
-
-<script>
-const NOTEBOOKS = {nb_json};
-const BUILD_DATE = "{build_ts}";
-{js}
-</script>
-</body>
-</html>"""
-    return html
 
 
 def main():
