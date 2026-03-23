@@ -1,0 +1,152 @@
+---
+title: "Mangrove Suitability Statistical Analysis"
+author: "Mamed Rifqy"
+date: "2026"
+output: html_document
+description: "Statistical analysis of mangrove rehabilitation suitability using shoreline change rate data, with spatial visualization using sf and ggplot2."
+---
+
+## Overview
+
+This notebook performs a statistical analysis of mangrove rehabilitation suitability
+across the Indragiri Hilir study area. We use shoreline change rates derived from
+the GEE script to classify each polygon as Suitable, Marginal, or Not Suitable.
+
+---
+
+## Step 1: Load Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+library(sf)          # spatial data handling
+library(dplyr)       # data wrangling
+library(ggplot2)     # plotting
+library(readr)       # CSV reading
+library(tidyr)       # reshaping data
+library(viridis)     # colour palettes
+
+# Suppress scientific notation in output
+options(scipen = 999)
+```
+
+## Step 2: Load the Data
+
+We load the shapefile containing the rehabilitation polygons and the
+CSV summary exported from the Python analysis.
+
+```{r load-data}
+# Load spatial polygons
+polygons <- st_read("PRM_RIAU_2026_WGS.shp", quiet = TRUE)
+
+# Load the suitability summary CSV
+summary_df <- read_csv("mangrove_suitability_report_summary.csv")
+
+# Preview the data
+glimpse(summary_df)
+```
+
+## Step 3: Classify Suitability
+
+Suitability is determined by the mean shoreline change rate (metres/year):
+a rate below 2 m/yr is **Suitable**, between 2–10 m/yr is **Marginal**,
+and above 10 m/yr is **Not Suitable**.
+
+```{r classify}
+STABLE_THRESHOLD   <- 2.0   # m/yr — Suitable threshold
+MODERATE_THRESHOLD <- 10.0  # m/yr — Marginal threshold
+
+summary_df <- summary_df %>%
+  mutate(
+    Suitability = case_when(
+      abs(`Rate (m/yr)`) <= STABLE_THRESHOLD   ~ "SUITABLE",
+      abs(`Rate (m/yr)`) <= MODERATE_THRESHOLD ~ "MARGINAL",
+      TRUE                                      ~ "NOT SUITABLE"
+    )
+  )
+
+# Count results
+table(summary_df$Suitability)
+```
+
+## Step 4: Summary Statistics
+
+```{r stats}
+# Overall change rate statistics
+summary_df %>%
+  group_by(Suitability) %>%
+  summarise(
+    Count      = n(),
+    Mean_Rate  = mean(abs(`Rate (m/yr)`), na.rm = TRUE),
+    SD_Rate    = sd(abs(`Rate (m/yr)`), na.rm = TRUE),
+    Min_Rate   = min(abs(`Rate (m/yr)`), na.rm = TRUE),
+    Max_Rate   = max(abs(`Rate (m/yr)`), na.rm = TRUE)
+  ) %>%
+  arrange(Mean_Rate)
+```
+
+## Step 5: Visualise Distribution
+
+```{r plot-distribution, fig.width=8, fig.height=5}
+# Colour palette matching the suitability categories
+suitability_colours <- c(
+  "SUITABLE"     = "#2d5a3d",
+  "MARGINAL"     = "#b45309",
+  "NOT SUITABLE" = "#c0392b"
+)
+
+ggplot(summary_df, aes(x = abs(`Rate (m/yr)`), fill = Suitability)) +
+  geom_histogram(bins = 20, colour = "white", linewidth = 0.3) +
+  scale_fill_manual(values = suitability_colours) +
+  geom_vline(xintercept = STABLE_THRESHOLD,   linetype = "dashed", colour = "#2d5a3d") +
+  geom_vline(xintercept = MODERATE_THRESHOLD, linetype = "dashed", colour = "#c0392b") +
+  labs(
+    title    = "Distribution of Shoreline Change Rates",
+    subtitle = "Dashed lines show Suitable / Marginal thresholds",
+    x        = "Absolute Change Rate (m/yr)",
+    y        = "Count",
+    fill     = "Suitability"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "top"
+  )
+```
+
+## Step 6: Spatial Join and Map
+
+```{r spatial-map, fig.width=10, fig.height=8}
+# Join suitability results back to the spatial polygons
+polygons_joined <- polygons %>%
+  left_join(summary_df, by = c("kelompok" = "Kelompok"))
+
+# Plot a simple choropleth
+ggplot(polygons_joined) +
+  geom_sf(aes(fill = Suitability), colour = "white", linewidth = 0.3) +
+  scale_fill_manual(values = suitability_colours, na.value = "grey80") +
+  labs(
+    title    = "Mangrove Rehabilitation Suitability Map",
+    subtitle = "Indragiri Hilir, Riau — 2017–2025 Shoreline Analysis",
+    fill     = "Suitability",
+    caption  = "Data: Landsat 8 via Google Earth Engine"
+  ) +
+  theme_void(base_size = 11) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(colour = "grey40"),
+    legend.position = "bottom"
+  )
+```
+
+## Step 7: Export Results
+
+```{r export}
+# Save the classified shapefile for use in GIS software
+st_write(polygons_joined, "mangrove_suitability_classified.gpkg",
+         driver = "GPKG", delete_dsn = TRUE, quiet = TRUE)
+
+# Save the summary table
+write_csv(summary_df, "suitability_summary_r.csv")
+
+cat("Exported: mangrove_suitability_classified.gpkg\n")
+cat("Exported: suitability_summary_r.csv\n")
+```
