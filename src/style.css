@@ -221,3 +221,85 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
   .hero-title{font-size:1.6rem}
   .nb-hero-pills .pkg-pill{font-size:.58rem}
 }
+
+/* ── LANGUAGE FILTER BAR ─────────────────────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-bottom: 1.25rem;
+}
+
+.filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-family: var(--sans);
+  font-size: .72rem;
+  font-weight: 500;
+  padding: .38rem .85rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all .18s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.filter-btn:hover {
+  border-color: var(--border2);
+  color: var(--text);
+}
+
+.filter-btn.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
+.filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: .6rem;
+  font-weight: 700;
+  background: rgba(255,255,255,.25);
+  color: inherit;
+}
+
+.filter-btn:not(.active) .filter-count {
+  background: var(--bg);
+  color: var(--muted2);
+}
+
+/* ── LANGUAGE BADGE (on cards) ───────────────────────────────────────────── */
+.lang-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  font-size: .58rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: .18rem .55rem;
+  border-radius: 20px;
+  border: 1px solid;
+  margin-bottom: .5rem;
+}
+
+/* ── CODE CELL accent dot color per language ─────────────────────────────── */
+.code-cell-label::before {
+  background: var(--cell-accent, var(--green-mid));
+}
+
+/* ── SIDEBAR section labels with language accent ─────────────────────────── */
+.sidebar-section-label {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
