@@ -408,167 +408,166 @@ def _notebook_dict(path, lang, title, category, icon, accent, desc, tags, cells)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_site(all_notebooks: list[dict]) -> str:
+    """Render the complete HTML site."""
     nb_json   = json.dumps(all_notebooks, ensure_ascii=False)
     build_ts  = datetime.now().strftime("%d %b %Y, %H:%M")
-
-    # Group notebooks by language for sidebar sections and stats
-    by_lang = {}
-    for lang in LANGUAGES:
-        by_lang[lang["id"]] = [n for n in all_notebooks if n["lang"] == lang["id"]]
-
-    total_pkgs = len(set(t for nb in all_notebooks for t in nb["tags"]))
-    count      = len(all_notebooks)
-    nb_count_label = f"{count} notebook{'s' if count!=1 else ''}"
+    count     = len(all_notebooks)
+    by_lang   = {l["id"]: [n for n in all_notebooks if n["lang"] == l["id"]] for l in LANGUAGES}
 
     src_dir = Path(__file__).parent / "src"
     css = (src_dir / "style.css").read_text(encoding="utf-8") if (src_dir / "style.css").exists() else ""
     js  = (src_dir / "app.js").read_text(encoding="utf-8")   if (src_dir / "app.js").exists()   else ""
 
-    # Build sidebar sections HTML
-    sidebar_sections = ""
+    # ── Sidebar nav items (pre-rendered, JS just highlights active) ──────────
+    sidebar_nav = ""
     for lang in LANGUAGES:
-        nbs = by_lang[lang["id"]]
+        nbs = by_lang.get(lang["id"], [])
         if not nbs:
             continue
-        sidebar_sections += (
-            f'  <div class="sidebar-section-label">'
-            f'<span style="color:{lang["accent"]}">{lang["icon"]}</span> {lang["label"]}'
-            f'</div>\n'
+        dot_color = lang["accent"]
+        sidebar_nav += (
+            f'  <div class="sb-section">'
+            f'<span class="sb-section-dot" style="background:{dot_color}"></span>'
+            f'{lang["label"]}</div>\n'
         )
         for nb in sorted(nbs, key=lambda n: n["mtime"], reverse=True):
-            sidebar_sections += (
-                f'  <div class="nb-item" id="nav-{nb["id"]}" '
+            sidebar_nav += (
+                f'  <div class="nb-item" data-id="{nb["id"]}" '
                 f'onclick="showNotebook(\'{nb["id"]}\')">'
                 f'<span class="nb-icon">{nb["icon"]}</span>'
-                f'<div><div class="nb-name">{nb["short"]}</div>'
-                f'<div class="nb-cat">{nb["category"]}</div></div>'
-                f'</div>\n'
+                f'<div>'
+                f'<div class="nb-name">{nb["short"]}</div>'
+                f'<div class="nb-cat">{nb["category"]}</div>'
+                f'</div></div>\n'
             )
 
-    # Language stats for the care outlook widget
-    care_rows = ""
-    for lang in LANGUAGES:
-        n = len(by_lang[lang["id"]])
-        if n == 0:
-            continue
-        care_rows += (
-            f'    <div class="care-row">'
-            f'<div class="care-icon" style="background:{lang["bg"]}">{lang["icon"]}</div>'
-            f'<div><div class="care-text">{lang["label"]}</div>'
-            f'<div class="care-sub">{n} notebook{"s" if n!=1 else ""}</div></div>'
-            f'</div>\n'
-        )
+    nb_count_label = f"{count} notebook{'s' if count != 1 else ''}"
+    langs_json = json.dumps([
+        {"id": l["id"], "label": l["label"], "icon": l["icon"],
+         "accent": l["accent"], "bg": l["bg"]}
+        for l in LANGUAGES
+    ])
 
-    html = (
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
-        "<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
-        f"<title>{SITE_TITLE}</title>\n"
-        "<link href=\"https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1"
-        "&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400"
-        "&family=DM+Mono:wght@300;400;500&display=swap\" rel=\"stylesheet\">\n"
-        f"<style>{css}</style>\n"
-        "</head>\n<body>\n\n"
+    html = "\n".join([
+        "<!DOCTYPE html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="UTF-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
+        f'<title>{SITE_TITLE}</title>',
+        '<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1'
+        '&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400'
+        '&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">',
+        f"<style>{css}</style>",
+        "</head>",
+        "<body>",
 
-        "<!-- Drawer overlay -->\n"
-        "<div class=\"drawer-overlay\" id=\"drawerOverlay\" onclick=\"closeDrawer()\"></div>\n\n"
+        # Drawer overlay
+        '<div class="overlay" id="overlay" onclick="closeDrawer()"></div>',
 
-        "<nav class=\"sidebar\" id=\"sidebar\">\n"
-        "  <div class=\"sidebar-header\">\n"
-        "    <div class=\"logo\">Geo<span>Lab</span></div>\n"
-        "    <div class=\"logo-sub\">The Spatial Editorial</div>\n"
-        "  </div>\n"
-        "  <div class=\"care-outlook\">\n"
-        "    <div class=\"care-label\">Collection Outlook</div>\n"
-        + care_rows +
-        "    <button class=\"btn-primary\" onclick=\"showLanding()\">View Collection</button>\n"
-        "  </div>\n"
-        + sidebar_sections +
-        "  <div class=\"sidebar-footer\">\n"
-        f"    <a href=\"{OWNER_URL}\" target=\"_blank\" class=\"sf-link\">👤 {OWNER_NAME}</a>\n"
-        "  </div>\n"
-        "</nav>\n\n"
+        # Sidebar
+        '<aside class="sidebar" id="sidebar">',
+        '  <div class="sidebar-header">',
+        '    <div class="logo">Geo<em>Lab</em></div>',
+        '    <div class="logo-sub">The Spatial Editorial</div>',
+        '  </div>',
+        '  <div class="sidebar-body">',
+        sidebar_nav,
+        '  </div>',
+        '  <div class="sidebar-footer">',
+        f'    <a href="{OWNER_URL}" target="_blank" class="sf-link">',
+        f'      <span>👤</span> {OWNER_NAME}',
+        '    </a>',
+        '  </div>',
+        '</aside>',
 
-        "<div class=\"layout\">\n"
-        "  <div class=\"content-wrap\">\n"
-        "    <div class=\"topbar\">\n"
-        "      <div style=\"display:flex;align-items:center;gap:.6rem\">\n"
-        "        <button class=\"btn-menu\" onclick=\"openDrawer()\" aria-label=\"Menu\">\n"
-        "          <svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\">"
-        "<path d=\"M3 5h14M3 10h14M3 15h14\"/></svg>\n"
-        "        </button>\n"
-        "        <div class=\"breadcrumb\">\n"
-        "          <span class=\"bc-home\" onclick=\"showLanding()\">GeoLab</span>\n"
-        "          <span class=\"sep\">/</span>\n"
-        "          <span class=\"current\" id=\"breadcrumbCurrent\">Overview</span>\n"
-        "        </div>\n"
-        "      </div>\n"
-        "      <div class=\"topbar-actions\">\n"
-        "        <button class=\"btn-home\" id=\"homeBtn\" onclick=\"showLanding()\">&#8592; All</button>\n"
-        "        <a class=\"btn-dl\" id=\"dlBtn\" href=\"#\" download>\n"
-        "          <svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\">"
-        "<path d=\"M8 2v8M5 7l3 3 3-3M2 13h12\"/></svg>\n"
-        "          <span>Download</span>\n"
-        "        </a>\n"
-        "      </div>\n"
-        "    </div>\n"
-        "    <div class=\"page-area\">\n"
-        "      <div class=\"nb-content\" id=\"nbContent\"></div>\n"
-        "      <div class=\"toc-panel\" id=\"tocPanel\">\n"
-        "        <div class=\"toc-label\">On this page</div>\n"
-        "        <ul class=\"toc-list\" id=\"tocList\"></ul>\n"
-        "      </div>\n"
-        "    </div>\n"
-        "  </div>\n"
-        "</div>\n\n"
+        # Main layout
+        '<div class="layout">',
 
-        "<footer class=\"site-footer\">\n"
-        "  <div class=\"footer-inner\">\n"
-        "    <div class=\"footer-left\">\n"
-        "      <span class=\"footer-logo\">Geo<span>Lab</span></span>\n"
-        "      <span class=\"footer-dot\">&middot;</span>\n"
-        "      <span class=\"footer-tag\">Geospatial Notebook Portfolio</span>\n"
-        "    </div>\n"
-        f"    <div class=\"footer-center\">Built &amp; maintained by "
-        f"<a href=\"{OWNER_URL}\" target=\"_blank\" rel=\"noopener\">{OWNER_NAME}</a></div>\n"
-        "    <div class=\"footer-right\">\n"
-        f"      <span>Last built: {build_ts}</span>"
-        f"<span class=\"footer-dot\">&middot;</span>"
-        f"<span>{nb_count_label}</span>\n"
-        "    </div>\n"
-        "  </div>\n"
-        "</footer>\n\n"
+        # Topbar
+        '  <header class="topbar">',
+        '    <div class="topbar-left">',
+        '      <button class="btn-menu" onclick="openDrawer()" aria-label="Open menu">',
+        '        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor"'
+        '             stroke-width="1.8" stroke-linecap="round">',
+        '          <path d="M3 5h14M3 10h14M3 15h14"/>',
+        '        </svg>',
+        '      </button>',
+        '      <nav class="breadcrumb">',
+        '        <span class="bc-home" onclick="showLanding()">GeoLab</span>',
+        '        <span class="bc-sep">/</span>',
+        '        <span class="bc-current" id="bc-current">Overview</span>',
+        '      </nav>',
+        '    </div>',
+        '    <div class="topbar-right">',
+        '      <button class="btn-back" id="btn-back" onclick="showLanding()">← All</button>',
+        '      <a class="btn-dl" id="btn-dl" href="#" download>',
+        '        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">',
+        '          <path d="M8 2v8M5 7l3 3 3-3M2 13h12"/>',
+        '        </svg>',
+        '        Download',
+        '      </a>',
+        '    </div>',
+        '  </header>',
 
-        "<nav class=\"bottom-nav\" id=\"bottomNav\">\n"
-        "  <button class=\"bn-tab active\" data-tab=\"home\" onclick=\"showLanding()\">\n"
-        "    <span class=\"bn-icon\">🏠</span><span class=\"bn-label\">Home</span>\n"
-        "  </button>\n"
-        "  <button class=\"bn-tab\" data-tab=\"browse\" onclick=\"openDrawer()\">\n"
-        "    <span class=\"bn-icon\">📚</span><span class=\"bn-label\">Browse</span>\n"
-        "  </button>\n"
-        "  <button class=\"bn-tab\" id=\"dlTabBtn\" data-tab=\"dl\" "
-        "onclick=\"document.getElementById('dlBtn').click()\" style=\"display:none\">\n"
-        "    <span class=\"bn-icon\">⬇️</span><span class=\"bn-label\">Download</span>\n"
-        "  </button>\n"
-        f"  <a class=\"bn-tab\" data-tab=\"profile\" href=\"{OWNER_URL}\" "
-        "target=\"_blank\" style=\"text-decoration:none\">\n"
-        "    <span class=\"bn-icon\">👤</span><span class=\"bn-label\">About</span>\n"
-        "  </a>\n"
-        "</nav>\n\n"
+        # Page body
+        '  <div class="page-body">',
+        '    <div class="main-scroll" id="main-scroll"></div>',
+        '    <aside class="toc-panel" id="toc-panel">',
+        '      <div class="toc-title">On this page</div>',
+        '      <ul class="toc-list" id="toc-list"></ul>',
+        '    </aside>',
+        '  </div>',
 
-        "<script>\n"
-        f"const NOTEBOOKS = {nb_json};\n"
-        f"const BUILD_DATE = \"{build_ts}\";\n"
-        f"const LANGUAGES = {json.dumps([{'id':l['id'],'label':l['label'],'icon':l['icon'],'accent':l['accent'],'bg':l['bg']} for l in LANGUAGES])};\n"
-        f"{js}\n"
-        "</script>\n"
-        "</body>\n</html>\n"
-    )
+        '</div>',  # end .layout
+
+        # Desktop footer
+        '<footer class="site-footer">',
+        '  <div class="footer-inner">',
+        '    <span class="footer-logo">Geo<em>Lab</em></span>',
+        f'    <div class="footer-center">Built by <a href="{OWNER_URL}" target="_blank" rel="noopener">{OWNER_NAME}</a></div>',
+        '    <div class="footer-right">',
+        f'      <span>Built {build_ts}</span>',
+        '      <span class="footer-sep">&middot;</span>',
+        f'      <span>{nb_count_label}</span>',
+        '    </div>',
+        '  </div>',
+        '</footer>',
+
+        # Mobile bottom nav
+        '<nav class="bottom-nav">',
+        '  <button class="bnav-btn active" data-tab="home" onclick="showLanding()">',
+        '    <span class="bnav-icon">🏠</span>',
+        '    <span class="bnav-label">Home</span>',
+        '  </button>',
+        '  <button class="bnav-btn" data-tab="browse" onclick="openDrawer()">',
+        '    <span class="bnav-icon">📚</span>',
+        '    <span class="bnav-label">Browse</span>',
+        '  </button>',
+        '  <button class="bnav-btn" data-tab="read">',
+        '    <span class="bnav-icon">📖</span>',
+        '    <span class="bnav-label">Reading</span>',
+        '  </button>',
+        f'  <a class="bnav-btn" data-tab="about" href="{OWNER_URL}"'
+        '   target="_blank" style="text-decoration:none">',
+        '    <span class="bnav-icon">👤</span>',
+        '    <span class="bnav-label">About</span>',
+        '  </a>',
+        '</nav>',
+
+        # Scripts
+        "<script>",
+        f"const NOTEBOOKS = {nb_json};",
+        f'const BUILD_DATE = "{build_ts}";',
+        f"const LANGUAGES = {langs_json};",
+        js,
+        "</script>",
+        "</body>",
+        "</html>",
+    ])
+
     return html
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  MAIN
-# ══════════════════════════════════════════════════════════════════════════════
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
