@@ -1,6 +1,6 @@
 /**
  * ============================================================
- *  Title       : Carbon Emission Estimation from Mangrove Forests
+// ── Carbon Emission Estimation from Mangrove Forests ────────────────────────────────────────
  *  Description : Estimates above-ground carbon stock and CO₂ emissions
  *                from mangrove rehabilitation areas using Sentinel-2
  *                spectral indices and a regional biomass allometric model
